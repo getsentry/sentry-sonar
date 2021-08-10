@@ -13,7 +13,7 @@ public class ApiClientTest extends TestCase {
     public void setUp() throws Exception {
         super.setUp();
 
-        this.client = new ApiClient(new ApiToken(""));
+        this.client = new ApiClient(new ApiToken(System.getenv("SENTRY_APIKEY")));
     }
 
     public void testGetUrl() {
