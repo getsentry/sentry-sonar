@@ -31,7 +31,9 @@ public class SentryProperties {
     public static final String TOKEN_KEY = "io.sentry.integrations.sonar.token";
     public static final String ORGANIZATION_KEY = "io.sentry.integrations.sonar.organization";
     public static final String PROJECT_KEY = "io.sentry.integrations.sonar.project_id";
+    public static final String PATH_PREFIX_KEY = "io.sentry.integrations.sonar.path_prefix";
     public static final String SENTRY_CATEGORY = "Sentry";
+    public static final String DEFAULT_PATH_PREFIX = "/";
 
     private SentryProperties() {
         // only statics
@@ -57,6 +59,13 @@ public class SentryProperties {
                         .description("Numeric ID of the Sentry project")
                         .defaultValue("")
                         .type(PropertyType.INTEGER)
+                        .category(SENTRY_CATEGORY)
+                        .build(),
+                PropertyDefinition.builder(PATH_PREFIX_KEY)
+                        .name("Path prefix")
+                        .description("Common prefix of all files in absolute file paths on the productive application")
+                        .defaultValue(DEFAULT_PATH_PREFIX)
+                        .type(PropertyType.STRING)
                         .category(SENTRY_CATEGORY)
                         .build()
                 );

@@ -33,7 +33,6 @@ import org.sonar.api.batch.rule.Severity;
 import org.sonar.api.batch.sensor.SensorContext;
 import org.sonar.api.batch.sensor.SensorDescriptor;
 import org.sonar.api.batch.sensor.issue.NewExternalIssue;
-import org.sonar.api.batch.sensor.issue.NewIssue;
 import org.sonar.api.batch.sensor.issue.NewIssueLocation;
 import org.sonar.api.config.Configuration;
 import org.sonar.api.rules.RuleType;
@@ -84,6 +83,20 @@ public class CreateSentryIssuesSensor implements ProjectSensor {
         return Math.max(projectId, 0);
     }
 
+    private String getPathPrefix() {
+        return config.get(SentryProperties.PATH_PREFIX_KEY)
+                .orElse(SentryProperties.DEFAULT_PATH_PREFIX);
+    }
+
+    private String stripPrefix(String path) {
+        String prefix = getPathPrefix();
+        if (path != null && path.startsWith(prefix)) {
+            return path.substring(prefix.length());
+        }
+
+        return null;
+    }
+
     private void saveError(SensorContext context, String message) {
         context.newAnalysisError().message(message).save();
     }
@@ -121,9 +134,9 @@ public class CreateSentryIssuesSensor implements ProjectSensor {
         FileSystem fs = context.fileSystem();
 
         for (StackTraceHit hit : stackTraceHits) {
-            List<String> fileNames = hit.getFileNames();
+            List<String> absPaths = hit.getAbsPaths();
             List<Integer> lineNumbers = hit.getLineNumbers();
-            if (fileNames.isEmpty()) {
+            if (absPaths.isEmpty()) {
                 continue;
             }
 
@@ -146,11 +159,15 @@ public class CreateSentryIssuesSensor implements ProjectSensor {
                     .type(RuleType.BUG)
                     .severity(Severity.MAJOR);
 
-            int lastIndex = fileNames.size() - 1;
-            for (int index = 0; index < fileNames.size(); index++) {
-                String primaryFileName = fileNames.get(index);
+            int lastIndex = absPaths.size() - 1;
+            for (int index = 0; index < absPaths.size(); index++) {
+                String relativePath = stripPrefix(absPaths.get(index));
+                if (relativePath == null) {
+                    // This file is not considered app code.
+                    continue;
+                }
 
-                FilePredicate predicate = fs.predicates().matchesPathPattern("**/" + primaryFileName);
+                FilePredicate predicate = fs.predicates().hasRelativePath(relativePath);
                 InputFile inputFile = fs.inputFile(predicate);
                 if (inputFile == null) {
                     continue;

@@ -5,8 +5,8 @@ import com.google.gson.annotations.SerializedName;
 import java.util.List;
 
 public class StackTraceHit {
-    @SerializedName("stack.filename")
-    private List<String> fileNames;
+    @SerializedName("stack.abs_path")
+    private List<String> absPaths;
     @SerializedName("stack.lineno")
     private List<Integer> lineNumbers;
     @SerializedName("issue")
@@ -15,8 +15,8 @@ public class StackTraceHit {
     private long issueId;
     private long count;
 
-    public List<String> getFileNames() {
-        return fileNames;
+    public List<String> getAbsPaths() {
+        return absPaths;
     }
 
     public List<Integer> getLineNumbers() {
