@@ -19,6 +19,8 @@
  */
 package io.sentry.integrations.sonar.rules;
 
+import io.sentry.api.ApiToken;
+import io.sentry.api.InvalidApiToken;
 import io.sentry.integrations.sonar.settings.SentryProperties;
 import org.sonar.api.batch.fs.FileSystem;
 import org.sonar.api.batch.fs.InputFile;
@@ -51,20 +53,9 @@ public class CreateSentryIssuesSensor implements ProjectSensor {
         this.config = config;
     }
 
-    private Optional<String> getSentryToken() {
+    private ApiToken getSentryToken() throws InvalidApiToken {
         String token = config.get(SentryProperties.TOKEN_KEY).orElse("");
-
-        if (token.length() != 64) {
-            return Optional.empty();
-        }
-
-        for (int i = 0; i < token.length(); i++) {
-            if (Character.digit(token.charAt(i), 16) == -1) {
-                return Optional.empty();
-            }
-        }
-
-        return Optional.of(token);
+        return new ApiToken(token);
     }
 
     @Override
@@ -78,13 +69,14 @@ public class CreateSentryIssuesSensor implements ProjectSensor {
     public void execute(SensorContext context) {
         LOGGER.info("Running Sentry analyzer");
 
-        Optional<String> optToken = getSentryToken();
-        if (!optToken.isPresent()) {
+        ApiToken token;
+        try {
+            token = getSentryToken();
+        } catch (InvalidApiToken e) {
             context.newAnalysisError().message("The Sentry token is missing or not valid").save();
             return;
         }
 
-        String token = optToken.get();
         LOGGER.info("Using integration token for Sentry: " + token);
 
         // TODO: Instead of iterating locations, iterate the bugs and then annotate locations and add secondaryLocations
