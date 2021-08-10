@@ -26,6 +26,11 @@ public class ApiClientTest extends TestCase {
         assertFalse("there should be issues", issues.isEmpty());
     }
 
+    public void testGetIssue() throws RequestException {
+        SentryIssue issue = client.getIssue( 2512273768L);
+        assertNotNull("there should be an issue", issue);
+    }
+
     public void testQueryIssuesByPath() throws RequestException{
         List<StackTraceHit> issues = client.countStackTraces("sentry", 1);
         assertFalse("there should be issues", issues.isEmpty());

@@ -131,6 +131,10 @@ public class ApiClient {
         return get(type, new String[]{"projects", organization, project, "issues"}, new QueryParam[]{});
     }
 
+    public SentryIssue getIssue(long issueId) throws RequestException {
+        return get(SentryIssue.class, new String[]{"issues", String.valueOf(issueId)}, new QueryParam[] {});
+    }
+
     public List<StackTraceHit> countStackTraces(String organization, int projectId) throws RequestException {
         QueryParam[] query = {
                 new QueryParam("project", String.valueOf(projectId)),
@@ -139,7 +143,7 @@ public class ApiClient {
                 new QueryParam("statsPeriod", "14d"), // TODO: Parameterize
 
                 new QueryParam("field", "issue"),
-                new QueryParam("field", "stack.abs_path"),
+                new QueryParam("field", "stack.filename"),
                 new QueryParam("field", "stack.lineno"),
                 new QueryParam("field", "count()"),
                 new QueryParam("field", "count_unique(user.display)"),
