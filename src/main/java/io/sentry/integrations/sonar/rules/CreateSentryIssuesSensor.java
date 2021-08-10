@@ -19,9 +19,14 @@
  */
 package io.sentry.integrations.sonar.rules;
 
+import io.sentry.api.ApiClient;
 import io.sentry.api.ApiToken;
 import io.sentry.api.InvalidApiToken;
+import io.sentry.api.RequestException;
+import io.sentry.api.schema.SentryIssue;
+import io.sentry.api.schema.StackTraceHit;
 import io.sentry.integrations.sonar.settings.SentryProperties;
+import org.sonar.api.batch.fs.FilePredicate;
 import org.sonar.api.batch.fs.FileSystem;
 import org.sonar.api.batch.fs.InputFile;
 import org.sonar.api.batch.rule.Severity;
@@ -36,7 +41,7 @@ import org.sonar.api.scanner.sensor.ProjectSensor;
 import org.sonar.api.utils.log.Logger;
 import org.sonar.api.utils.log.Loggers;
 
-import java.util.Optional;
+import java.util.List;
 
 /**
  * Generates issues on all java files at line 1.
@@ -45,7 +50,6 @@ public class CreateSentryIssuesSensor implements ProjectSensor {
 
     private static final Logger LOGGER = Loggers.get(CreateSentryIssuesSensor.class);
     private static final double ARBITRARY_GAP = 2.0;
-    private static final int LINE_1 = 1;
 
     private final Configuration config;
 
@@ -53,16 +57,35 @@ public class CreateSentryIssuesSensor implements ProjectSensor {
         this.config = config;
     }
 
+    @Override
+    public void describe(SensorDescriptor descriptor) {
+        descriptor
+                .name("Annotate Sentry issues on line 1 of all Java files")
+                .onlyWhenConfiguration(this::hasAllConfigs);
+    }
+
+    private boolean hasAllConfigs(Configuration configuration) {
+        return configuration.hasKey(SentryProperties.TOKEN_KEY)
+                && configuration.hasKey(SentryProperties.ORGANIZATION_KEY)
+                && configuration.hasKey(SentryProperties.PROJECT_KEY);
+    }
+
     private ApiToken getSentryToken() throws InvalidApiToken {
         String token = config.get(SentryProperties.TOKEN_KEY).orElse("");
         return new ApiToken(token);
     }
 
-    @Override
-    public void describe(SensorDescriptor descriptor) {
-        descriptor
-                .name("Annotate Sentry issues on line 1 of all Java files")
-                .onlyWhenConfiguration(configuration -> configuration.hasKey(SentryProperties.TOKEN_KEY));
+    private String getOrganizationSlug() {
+        return config.get(SentryProperties.ORGANIZATION_KEY).orElse("");
+    }
+
+    private int getProjectId() {
+        int projectId = config.getInt(SentryProperties.PROJECT_KEY).orElse(0);
+        return Math.max(projectId, 0);
+    }
+
+    private void saveError(SensorContext context, String message) {
+        context.newAnalysisError().message(message).save();
     }
 
     @Override
@@ -73,43 +96,85 @@ public class CreateSentryIssuesSensor implements ProjectSensor {
         try {
             token = getSentryToken();
         } catch (InvalidApiToken e) {
-            context.newAnalysisError().message("The Sentry token is missing or not valid").save();
+            saveError(context, "The Sentry token is missing or not valid");
             return;
         }
 
-        LOGGER.info("Using integration token for Sentry: " + token);
+        String organization = getOrganizationSlug();
+        int project = getProjectId();
 
-        // TODO: Instead of iterating locations, iterate the bugs and then annotate locations and add secondaryLocations
+        if (organization.isEmpty() || project == 0) {
+            saveError(context, "Missing valid organization or project info");
+            return;
+        }
+
+        ApiClient client = new ApiClient(token);
+
+        List<StackTraceHit> stackTraceHits;
+        try {
+            stackTraceHits = client.countStackTraces(organization, project);
+        } catch (RequestException e) {
+            saveError(context, "Failed to fetch information from Sentry: " + e);
+            return;
+        }
 
         FileSystem fs = context.fileSystem();
-        Iterable<InputFile> allFiles = fs.inputFiles(fs.predicates().all());
 
-        for (InputFile file : allFiles) {
-            NewIssue newIssue = context.newIssue()
-                    .forRule(SentryRulesDefinition.ISSUES_RULE)
-                    .gap(ARBITRARY_GAP);
+        for (StackTraceHit hit : stackTraceHits) {
+            List<String> fileNames = hit.getFileNames();
+            List<Integer> lineNumbers = hit.getLineNumbers();
+            if (fileNames.isEmpty()) {
+                continue;
+            }
 
-            NewIssueLocation primaryLocation = newIssue.newLocation()
-                    .on(file)
-                    .at(file.selectLine(LINE_1))
-                    .message("This is an internal rule violation");
+            SentryIssue sentryIssue;
+            try {
+                sentryIssue = client.getIssue(hit.getIssueId());
+            } catch (RequestException e) {
+                saveError(context, String.format("Failed to fetch issue %s: %s", hit.getIssueShortId(), e));
+                return;
+            }
 
-            newIssue.at(primaryLocation);
-            newIssue.save();
+            if (!sentryIssue.isUnresolved()) {
+                LOGGER.debug(String.format("Skipping %s because it has status `%s`", hit.getIssueShortId(), sentryIssue.getStatus()));
+                continue;
+            }
 
-            NewExternalIssue extIssue = context.newExternalIssue()
+            NewExternalIssue sonarIssue = context.newExternalIssue()
                     .engineId("sentry")
                     .ruleId("sentry_issue")
                     .type(RuleType.BUG)
                     .severity(Severity.MAJOR);
 
-            NewIssueLocation extLocation = extIssue.newLocation()
-                    .on(file)
-                    .at(file.selectLine(LINE_1))
-                    .message("This is an external issue");
+            int lastIndex = fileNames.size() - 1;
+            for (int index = 0; index < fileNames.size(); index++) {
+                String primaryFileName = fileNames.get(index);
 
-            extIssue.at(extLocation);
-            extIssue.save();
+                FilePredicate predicate = fs.predicates().matchesPathPattern("**/" + primaryFileName);
+                InputFile inputFile = fs.inputFile(predicate);
+                if (inputFile == null) {
+                    continue;
+                }
+
+                NewIssueLocation sonarLocation = sonarIssue.newLocation()
+                        .on(inputFile)
+                        .message(sentryIssue.getTitle());
+
+                try {
+                    int lineNumber = lineNumbers.get(index);
+                    sonarLocation.at(inputFile.selectLine(lineNumber));
+                } catch (IndexOutOfBoundsException e) {
+                    // ignore
+                }
+
+                if (index == lastIndex) {
+                    sonarIssue.at(sonarLocation);
+                } else {
+                    sonarIssue.addLocation(sonarLocation);
+                }
+            }
+
+            sonarIssue.save();
         }
     }
 }
