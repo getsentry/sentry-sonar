@@ -23,45 +23,69 @@ import io.sentry.integrations.sonar.settings.SentryProperties;
 import org.sonar.api.batch.fs.FileSystem;
 import org.sonar.api.batch.fs.InputFile;
 import org.sonar.api.batch.rule.Severity;
-import org.sonar.api.batch.sensor.Sensor;
 import org.sonar.api.batch.sensor.SensorContext;
 import org.sonar.api.batch.sensor.SensorDescriptor;
 import org.sonar.api.batch.sensor.issue.NewExternalIssue;
 import org.sonar.api.batch.sensor.issue.NewIssue;
 import org.sonar.api.batch.sensor.issue.NewIssueLocation;
+import org.sonar.api.config.Configuration;
 import org.sonar.api.rules.RuleType;
+import org.sonar.api.scanner.sensor.ProjectSensor;
+import org.sonar.api.utils.log.Logger;
 import org.sonar.api.utils.log.Loggers;
 
-/**
- * Generates issues on all java files at line 1. This rule
- * must be activated in the Quality profile.
- */
-public class CreateSentryIssuesSensor implements Sensor {
+import java.util.Optional;
 
+/**
+ * Generates issues on all java files at line 1.
+ */
+public class CreateSentryIssuesSensor implements ProjectSensor {
+
+    private static final Logger LOGGER = Loggers.get(CreateSentryIssuesSensor.class);
     private static final double ARBITRARY_GAP = 2.0;
     private static final int LINE_1 = 1;
 
+    private final Configuration config;
+
+    public CreateSentryIssuesSensor(final Configuration config) {
+        this.config = config;
+    }
+
+    private Optional<String> getSentryToken() {
+        String token = config.get(SentryProperties.TOKEN_KEY).orElse("");
+
+        if (token.length() != 64) {
+            return Optional.empty();
+        }
+
+        for (int i = 0; i < token.length(); i++) {
+            if (Character.digit(token.charAt(i), 16) == -1) {
+                return Optional.empty();
+            }
+        }
+
+        return Optional.of(token);
+    }
+
     @Override
     public void describe(SensorDescriptor descriptor) {
-        descriptor.name("Annotate Sentry issues on line 1 of all Java files");
-        descriptor.createIssuesForRuleRepositories(SentryRulesDefinition.REPOSITORY);
+        descriptor
+                .name("Annotate Sentry issues on line 1 of all Java files")
+                .onlyWhenConfiguration(configuration -> configuration.hasKey(SentryProperties.TOKEN_KEY));
     }
 
     @Override
     public void execute(SensorContext context) {
-        Loggers.get(getClass()).info("Starting Sentry analysis");
+        LOGGER.info("Running Sentry analyzer");
 
-        String token = context.config().get(SentryProperties.TOKEN_KEY).orElse("");
-
-        if (token.equals("")) {
-            context.newAnalysisError()
-                    .message("Cannot annotate Sentry issues due to missing Sentry integration token")
-                    .save();
-
+        Optional<String> optToken = getSentryToken();
+        if (!optToken.isPresent()) {
+            context.newAnalysisError().message("The Sentry token is missing or not valid").save();
             return;
         }
 
-        Loggers.get(getClass()).info("Using integration token for Sentry: " + token);
+        String token = optToken.get();
+        LOGGER.info("Using integration token for Sentry: " + token);
 
         // TODO: Instead of iterating locations, iterate the bugs and then annotate locations and add secondaryLocations
 
@@ -76,7 +100,7 @@ public class CreateSentryIssuesSensor implements Sensor {
             NewIssueLocation primaryLocation = newIssue.newLocation()
                     .on(file)
                     .at(file.selectLine(LINE_1))
-                    .message("This is a rule violation");
+                    .message("This is an internal rule violation");
 
             newIssue.at(primaryLocation);
             newIssue.save();
