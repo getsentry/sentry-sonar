@@ -40,6 +40,7 @@ import org.sonar.api.scanner.sensor.ProjectSensor;
 import org.sonar.api.utils.log.Logger;
 import org.sonar.api.utils.log.Loggers;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -48,7 +49,6 @@ import java.util.List;
 public class CreateSentryIssuesSensor implements ProjectSensor {
 
     private static final Logger LOGGER = Loggers.get(CreateSentryIssuesSensor.class);
-    private static final double ARBITRARY_GAP = 2.0;
 
     private final Configuration config;
 
@@ -59,7 +59,7 @@ public class CreateSentryIssuesSensor implements ProjectSensor {
     @Override
     public void describe(SensorDescriptor descriptor) {
         descriptor
-                .name("Annotate Sentry issues on line 1 of all Java files")
+                .name("Annotate Sentry issues")
                 .onlyWhenConfiguration(this::hasAllConfigs);
     }
 
@@ -105,6 +105,8 @@ public class CreateSentryIssuesSensor implements ProjectSensor {
     public void execute(SensorContext context) {
         LOGGER.info("Running Sentry analyzer");
 
+        saveError(context, "The Sentry token is missing or not valid");
+
         ApiToken token;
         try {
             token = getSentryToken();
@@ -125,11 +127,14 @@ public class CreateSentryIssuesSensor implements ProjectSensor {
 
         List<StackTraceHit> stackTraceHits;
         try {
+            LOGGER.debug("Fetching Discover results from Sentry");
             stackTraceHits = client.countStackTraces(organization, project);
         } catch (RequestException e) {
             saveError(context, "Failed to fetch information from Sentry: " + e);
             return;
         }
+
+        LOGGER.debug("Received " + stackTraceHits.size() + " results from Discover");
 
         FileSystem fs = context.fileSystem();
 
@@ -142,6 +147,7 @@ public class CreateSentryIssuesSensor implements ProjectSensor {
 
             SentryIssue sentryIssue;
             try {
+                LOGGER.debug(String.format("  fetching Sentry Issue %s (%s)", hit.getIssueId(), hit.getIssueShortId()));
                 sentryIssue = client.getIssue(hit.getIssueId());
             } catch (RequestException e) {
                 saveError(context, String.format("Failed to fetch issue %s: %s", hit.getIssueShortId(), e));
@@ -159,8 +165,8 @@ public class CreateSentryIssuesSensor implements ProjectSensor {
                     .type(RuleType.BUG)
                     .severity(Severity.MAJOR);
 
-            int lastIndex = absPaths.size() - 1;
-            for (int index = 0; index < absPaths.size(); index++) {
+            List<NewIssueLocation> locations = new ArrayList<>();
+            for (int index = absPaths.size() - 1; index >= 0; index--) {
                 String relativePath = stripPrefix(absPaths.get(index));
                 if (relativePath == null) {
                     // This file is not considered app code.
@@ -184,14 +190,24 @@ public class CreateSentryIssuesSensor implements ProjectSensor {
                     // ignore
                 }
 
-                if (index == lastIndex) {
-                    sonarIssue.at(sonarLocation);
-                } else {
-                    sonarIssue.addLocation(sonarLocation);
-                }
+                locations.add(sonarLocation);
             }
 
-            sonarIssue.save();
+            if (locations.isEmpty()) {
+                LOGGER.debug(String.format("Skipping %s because it has no valid locations", sentryIssue.getShortId()));
+                continue;
+            }
+
+            // Register the first location as primary location, and the rest as flow.
+            sonarIssue.at(locations.remove(0));
+            sonarIssue.addFlow(locations);
+
+            try {
+                LOGGER.debug("Adding issue with title: " + sentryIssue.getTitle());
+                sonarIssue.save();
+            } catch (Exception e) {
+                LOGGER.warn("Could not add issue: " + e);
+            }
         }
     }
 }
