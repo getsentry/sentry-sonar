@@ -143,7 +143,7 @@ public class ApiClient {
                 new QueryParam("statsPeriod", "14d"), // TODO: Parameterize
 
                 new QueryParam("field", "issue"),
-                new QueryParam("field", "stack.filename"),
+                new QueryParam("field", "stack.abs_path"),
                 new QueryParam("field", "stack.lineno"),
                 new QueryParam("field", "count()"),
                 new QueryParam("field", "count_unique(user.display)"),
